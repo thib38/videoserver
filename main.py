@@ -1,4 +1,5 @@
 import sys
+import numpy as np
 import logging
 import traceback
 import zmq
@@ -7,6 +8,7 @@ import time
 import socket
 import pickle
 from multiprocessing import Process, Pipe
+import threading
 
 from PyQt5.QtCore import *  # crashes if not generic
 from PyQt5.QtGui import *
@@ -30,7 +32,7 @@ class ImageServer():
         self.zmq_socket_listener = None
         print("zmq server initiating...")
         self._launch_zmp_server()
-        self._infinite_loop_get_image_and_queue_them()
+        self._infinite_loop_get_image_and_queue_them(pipe_connection_child)
 
     def _launch_zmp_server(self):
         # get ip address of the hots running the program
@@ -41,42 +43,28 @@ class ImageServer():
         self.zmq_socket_listener.bind("tcp://" + host_ip_address + ":" + self.tcp_port_listener)
         return None
 
-    def _infinite_loop_get_image_and_queue_them(self):
+    def _infinite_loop_get_image_and_queue_them(self, pipe_connection_child):
 
+        print("listener launched... ")
         while True:
-            multipart_message = self.zmq_socket_listener.recv_multipart()
-            camera_id, serialized_image = multipart_message
-            image_in_numpy_bgr_format = pickle.loads(serialized_image)
-            print("Received image from %s" % str(camera_id))
-            #  Send reply back to client with same data
-            self.zmq_socket_listener.send(b"ack")
+            # multipart_message = self.zmq_socket_listener.recv_multipart()
+            # camera_id, serialized_image = multipart_message
+            # image_in_numpy_bgr_format = pickle.loads(serialized_image)
+            # print("Received image from %s" % str(camera_id))
+            # #  Send reply back to client with same data
+            # self.zmq_socket_listener.send(b"ack")
+            # TODO REMVE DEBUG
+            camera_id = 1
+            image_in_numpy_bgr_format = np.zeros_like((500,375,3))
             # put message in the pipe
-            self.pipe_connection.send([camera_id, image_in_numpy_bgr_format])
-
-
-class ImageController():
-
-    def __init__(self):
-
-        # spawn ImageServer process
-        # pipe used to communicate with the process hosting zmq server that receives images from RaspberryPi
-        self.pipe_connection_parent, self.pipe_connection_child = Pipe()
-        self.P = Process(target=ImageServer, args=(self.pipe_connection_child, 5555,))
-        self.P.start()
-        print("Image Server started...")
-
-    def _thread_get_image_from_server_and_set_event(self):
-
-        #infinite loop on receive from pipe that is filled by the image server process
-        while True:
-            message = self.pipe_connection_parent.recv()  # message format is [camera_id, image_in_numpy_bgr_format]
-            # TODO store message in memory
-            # TODO set an event that triggers display
-            # TODO or call directly the display method ?
+            pipe_connection_child.send([camera_id, image_in_numpy_bgr_format])
+            time.sleep(1)
 
 
 
 class Controller(QMainWindow, Ui_MainWindow):
+
+    display_video_signal = pyqtSignal(int, np.ndarray)   # signal emitted when image server provide images to display
 
     def __init__(self):
         super().__init__()
@@ -84,9 +72,45 @@ class Controller(QMainWindow, Ui_MainWindow):
         # initialize ui
         self.setupUi(self)
 
-        # start zmq server that receives images from raspberryPi in separate process
+        self.display_video_signal.connect(self.display_image)
 
-        ic = ImageController()
+
+        # ic = ImageController(__class__.display_video_signal)
+
+        # pipe used to communicate with the process hosting zmq server that receives images from RaspberryPi
+        self.pipe_connection_parent, self.pipe_connection_child = Pipe()
+
+        # start thread that will wait for images from image server and will trigger the pyqtSigna display_video_signal
+        # that will call the display of th eimage on screen
+        t = threading.Thread(target=self._thread_get_image_from_server_and_set_event,
+                             args=(self.pipe_connection_parent, ))
+        t.daemon = True
+        t.start()
+        print("receiving thread started...")
+
+        # spawn ImageServer process
+        #  - zmq server that receives images from raspberryPi in separate process
+        #  - that send images via the Pipe
+        self.p = Process(target=ImageServer, args=(self.pipe_connection_child, 5555,))
+        self.p.start()
+        print("Image Server started...")
+
+
+
+    def _thread_get_image_from_server_and_set_event(self, pipe_connection_parent):
+
+        print("receiving thread started...")
+        #infinite loop on receive from pipe that is filled by the image server process
+        while True:
+            message = pipe_connection_parent.recv()  # message format is [camera_id, image_in_numpy_bgr_format]
+            print("received %s" % str(message))
+            camera_id, image_in_numpy_bgr_format = message
+            self.display_video_signal.emit(camera_id, image_in_numpy_bgr_format)
+
+    def display_image(self, camera_id, image_in_numpy_bgr_format=None):    # [camera_id, image_in_numpy_bgr_format]
+        # print(camera_id, image_in_numpy_bgr_format)
+        print(camera_id)
+
 
 
 def handle_uncaugth_exception(*exc_info):
