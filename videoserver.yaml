@@ -1,0 +1,13 @@
+camera list:
+- 192.186.1.27
+camera_dict:
+  un:
+    ip_address: 192.168.1.27
+    location: bureau
+    fps: 16
+    resolution: (640,480)
+  deux:
+    ip_address: 192.168.1.27
+    location: bureau
+    fps: 16
+    resolution: (640,480)
